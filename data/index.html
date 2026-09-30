@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1220" />
+  <title>CC1101 RF Gateway</title>
+  <link rel="stylesheet" href="/style.css?v=5" />
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark">RF</div>
+        <div>
+          <div class="brand-title">CC1101 Gateway</div>
+          <div class="brand-sub" id="brand-sub">433 MHz</div>
+        </div>
+      </div>
+      <nav class="nav" id="main-nav">
+        <button data-page="dashboard" class="nav-btn active">Dashboard</button>
+        <button data-page="spectrum" class="nav-btn">Spectrum</button>
+        <button data-page="liverx" class="nav-btn">Live RX</button>
+        <button data-page="recorder" class="nav-btn">Recorder</button>
+        <button data-page="signals" class="nav-btn">Saved Signals</button>
+        <button data-page="remotes" class="nav-btn">Devices</button>
+        <button data-page="actions" class="nav-btn">Actions</button>
+        <button data-page="homekit" class="nav-btn">HomeKit</button>
+        <button data-page="transmitter" class="nav-btn">Transmitter</button>
+        <button data-page="settings" class="nav-btn">Settings</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="pill" id="conn-pill">connecting</div>
+        <div class="muted" id="state-pill">IDLE</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn" id="menu-btn" aria-label="Menu">☰</button>
+        <h1 id="page-title">Dashboard</h1>
+        <div class="top-meta">
+          <span id="top-ip">—</span>
+          <span id="top-rssi">—</span>
+        </div>
+      </header>
+
+      <!-- SETUP / CAPTIVE -->
+      <section class="page" id="page-setup" hidden>
+        <div class="panel">
+          <h2>Wi-Fi Setup</h2>
+          <p class="muted">Select a network and enter the password. The device will reboot after saving.</p>
+          <div class="row">
+            <button class="btn" id="wifi-scan-btn">Scan Networks</button>
+          </div>
+          <div id="wifi-list" class="wifi-list"></div>
+          <form id="wifi-form" class="form-grid">
+            <label>SSID<input id="wifi-ssid" required maxlength="32" /></label>
+            <label>Password<input id="wifi-pass" type="password" maxlength="64" /></label>
+            <button class="btn primary" type="submit">Save &amp; Reboot</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- DASHBOARD -->
+      <section class="page" id="page-dashboard">
+        <div class="grid cards">
+          <div class="card">
+            <h3>Wi-Fi</h3>
+            <dl class="kv">
+              <dt>Status</dt><dd id="d-wifi">—</dd>
+              <dt>IP</dt><dd id="d-ip">—</dd>
+              <dt>RSSI</dt><dd id="d-wifi-rssi">—</dd>
+              <dt>Uptime</dt><dd id="d-uptime">—</dd>
+              <dt>Free heap</dt><dd id="d-heap">—</dd>
+            </dl>
+          </div>
+          <div class="card">
+            <h3>CC1101</h3>
+            <dl class="kv">
+              <dt>Status</dt><dd id="d-cc">—</dd>
+              <dt>PARTNUM</dt><dd id="d-part">—</dd>
+              <dt>VERSION</dt><dd id="d-ver">—</dd>
+              <dt>Frequency</dt><dd id="d-freq">—</dd>
+              <dt>Modulation</dt><dd id="d-mod">—</dd>
+              <dt>RSSI</dt><dd id="d-rssi">—</dd>
+              <dt>State</dt><dd id="d-state">—</dd>
+            </dl>
+            <pre class="trouble" id="d-trouble" hidden></pre>
+          </div>
+        </div>
+        <div class="row gap">
+          <button class="btn primary" id="btn-rx-start">Start RX</button>
+          <button class="btn" id="btn-rx-stop">Stop RX</button>
+        </div>
+      </section>
+
+      <!-- SPECTRUM -->
+      <section class="page" id="page-spectrum" hidden>
+        <div class="panel">
+          <h2>Frequency / RSSI Scanner</h2>
+          <p class="muted">Stepped RSSI scan — not an FFT/SDR spectrum.</p>
+          <div class="form-grid cols-3">
+            <label>Start MHz<input id="scan-start" type="number" step="0.01" value="433.00" /></label>
+            <label>End MHz<input id="scan-end" type="number" step="0.01" value="434.79" /></label>
+            <label>Step kHz<input id="scan-step" type="number" step="1" value="25" /></label>
+            <label>Dwell ms<input id="scan-dwell" type="number" step="1" value="5" /></label>
+            <label>RSSI threshold<input id="scan-thr" type="number" step="1" value="-70" /></label>
+            <label class="check"><input id="scan-find" type="checkbox" /> Find signal</label>
+          </div>
+          <div class="row gap">
+            <button class="btn primary" id="scan-start-btn">Start Scan</button>
+            <button class="btn" id="scan-stop-btn">Stop</button>
+          </div>
+          <div class="scan-banner" id="scan-banner" hidden>
+            <div class="scan-banner-title">SIGNAL DETECTED</div>
+            <div>Frequency: <strong id="det-freq">—</strong></div>
+            <div>RSSI: <strong id="det-rssi">—</strong></div>
+          </div>
+          <div class="meta-row">
+            <span>Peak: <strong id="scan-peak">—</strong></span>
+            <span>Current: <strong id="scan-cur">—</strong></span>
+          </div>
+          <canvas id="scan-canvas" width="900" height="280"></canvas>
+        </div>
+      </section>
+
+      <!-- LIVE RX -->
+      <section class="page" id="page-liverx" hidden>
+        <div class="panel">
+          <h2>Live Raw RX</h2>
+          <div class="grid cards tight">
+            <div class="stat"><span>Frequency</span><strong id="rx-freq">—</strong></div>
+            <div class="stat"><span>RSSI</span><strong id="rx-rssi">—</strong></div>
+            <div class="stat"><span>Edges</span><strong id="rx-edges">0</strong></div>
+            <div class="stat"><span>Pulses</span><strong id="rx-pulses">0</strong></div>
+            <div class="stat"><span>Length</span><strong id="rx-len">0 µs</strong></div>
+            <div class="stat"><span>Buffer</span><strong id="rx-buf">0%</strong></div>
+            <div class="stat"><span>Overflow</span><strong id="rx-ovf">no</strong></div>
+          </div>
+          <div class="row gap">
+            <button class="btn primary" id="live-rx-start">Start RX</button>
+            <button class="btn" id="live-rx-stop">Stop RX</button>
+          </div>
+          <canvas id="wave-canvas" width="900" height="180"></canvas>
+          <div class="row gap">
+            <label>Zoom <input id="wave-zoom" type="range" min="1" max="40" value="1" /></label>
+            <label>Offset <input id="wave-offset" type="range" min="0" max="100" value="0" /></label>
+          </div>
+          <pre class="code" id="rx-raw">No pulses yet</pre>
+        </div>
+      </section>
+
+      <!-- RECORDER -->
+      <section class="page" id="page-recorder" hidden>
+        <div class="pair-hero panel">
+          <div class="pair-kicker">Pair remote</div>
+          <h2>Learn a button</h2>
+          <p class="lead" id="rec-msg">Hold your remote close, then start pairing and hold the button down.</p>
+
+          <div class="pair-steps" id="rec-steps">
+            <div class="pair-step" data-step="1"><span>1</span>Quiet</div>
+            <div class="pair-step" data-step="2"><span>2</span>Hold</div>
+            <div class="pair-step" data-step="3"><span>3</span>Save</div>
+          </div>
+
+          <div class="rssi-meter">
+            <div class="rssi-labels">
+              <span>Signal</span>
+              <strong id="rec-live-rssi">— dBm</strong>
+            </div>
+            <div class="rssi-track"><div class="rssi-fill" id="rec-rssi-fill"></div></div>
+            <div class="rssi-meta">
+              <span>Noise <strong id="rec-noise">—</strong></span>
+              <span>Need ≥ <strong id="rec-thr">—</strong></span>
+              <span>Repeats <strong id="rec-presses">0</strong></span>
+            </div>
+          </div>
+
+          <div class="row gap center-row">
+            <button class="btn huge primary" id="rec-btn">Start pairing</button>
+            <button class="btn" id="rec-another" hidden>Pair another button</button>
+            <button class="btn" id="rec-cancel" hidden>Cancel</button>
+          </div>
+          <p class="hint">Tip: keep the remote within ~20 cm and hold the button for about a second so it sends several identical repeats.</p>
+        </div>
+
+        <div class="panel" id="rec-result" hidden>
+          <div class="pair-success">Paired successfully</div>
+          <dl class="kv">
+            <dt>Frequency</dt><dd id="rec-freq">—</dd>
+            <dt>Peak RSSI</dt><dd id="rec-rssi">—</dd>
+            <dt>Pulses</dt><dd id="rec-pulses">—</dd>
+            <dt>Duration</dt><dd id="rec-dur">—</dd>
+            <dt>Repetitions</dt><dd id="rec-reps">—</dd>
+          </dl>
+          <canvas id="rec-wave" width="900" height="140"></canvas>
+          <label>Name your button
+            <input id="rec-name" placeholder="Garage Door / Socket A ON" maxlength="40" />
+          </label>
+          <div class="row gap" id="rec-actions">
+            <button class="btn primary" id="rec-save">Save button</button>
+            <button class="btn" id="rec-replay">Test replay</button>
+            <button class="btn danger" id="rec-discard">Discard</button>
+          </div>
+          <details class="advanced">
+            <summary>Advanced / raw data</summary>
+            <h4>Timing clusters</h4>
+            <ul id="rec-clusters"></ul>
+            <h4>RAW DATA</h4>
+            <pre class="code" id="rec-raw"></pre>
+            <h4>DECODED / GUESSED <span class="badge">heuristic</span></h4>
+            <pre class="code" id="rec-bits"></pre>
+            <p class="muted" id="rec-note"></p>
+          </details>
+        </div>
+      </section>
+
+      <!-- SAVED SIGNALS -->
+      <section class="page" id="page-signals" hidden>
+        <div class="panel">
+          <div class="row between">
+            <div>
+              <h2>Saved Signals</h2>
+              <p class="muted">Press a paired remote — matching signals flash here.</p>
+            </div>
+            <button class="btn" id="signals-refresh">Refresh</button>
+          </div>
+          <div class="press-bar" id="signals-press-bar">
+            <span class="press-dot" id="signals-listen-dot"></span>
+            <span id="signals-listen-label">Standby</span>
+            <span class="muted" id="signals-last-press">No presses yet</span>
+          </div>
+          <div id="signals-list" class="signal-list"></div>
+          <div id="signal-detail" class="panel inset" hidden>
+            <h3 id="sig-detail-name">—</h3>
+            <pre class="code" id="sig-detail-raw"></pre>
+            <pre class="code" id="sig-detail-analysis"></pre>
+            <canvas id="sig-wave" width="900" height="140"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- DEVICES (API still /api/remotes) -->
+      <section class="page" id="page-remotes" hidden>
+        <div class="panel">
+          <div class="row between">
+            <div>
+              <h2>Devices</h2>
+              <p class="muted">Remotes, RF sensors, and weather-station temperature / humidity for HomeKit.</p>
+            </div>
+            <button class="btn primary" id="remote-new">New device</button>
+          </div>
+          <div class="press-bar" id="remotes-press-bar">
+            <span class="press-dot" id="remotes-listen-dot"></span>
+            <span id="remotes-listen-label">Standby</span>
+            <span class="muted" id="remotes-last-press">No presses yet</span>
+          </div>
+          <div id="remotes-list" class="signal-list"></div>
+          <div id="press-log" class="press-log" hidden></div>
+        </div>
+        <div class="panel" id="remote-editor" hidden>
+          <h3 id="remote-editor-title">New device</h3>
+          <label>Name<input id="remote-name" placeholder="Living Room Remote" maxlength="40" /></label>
+          <label>Device type
+            <select id="remote-type">
+              <option value="remote">Remote — buttons / switches</option>
+              <option value="sensor">Sensor — motion trigger in HomeKit</option>
+              <option value="temperature">Temperature — weather station</option>
+              <option value="humidity">Humidity — weather station</option>
+            </select>
+          </label>
+
+          <div id="remote-buttons-section">
+            <div class="row between" style="margin-top:0.8rem">
+              <h4 style="margin:0" id="remote-buttons-heading">Buttons</h4>
+              <button class="btn" id="remote-add-btn" type="button">Add button</button>
+            </div>
+            <p class="hint">Primary = On / press. Secondary = Off (stateful &amp; toggle). Both accept a saved signal or an Action. Secondary is disabled for stateless.</p>
+            <div id="remote-buttons" class="signal-list"></div>
+          </div>
+
+          <div id="remote-weather-section" hidden>
+            <p class="hint" style="margin-top:0.8rem">Wait for the outdoor sensor to transmit (often every 30–60s), then pick it below. Supports Nexus, GT-WT-02, Fine Offset WH2/WH5, Rubicson/TFA, inFactory, Esperanza.</p>
+            <div class="row gap">
+              <button class="btn" id="weather-refresh" type="button">Refresh readings</button>
+              <span class="muted" id="weather-status">Listening…</span>
+            </div>
+            <div id="weather-list" class="signal-list" style="margin-top:0.6rem"></div>
+            <div class="form-grid cols-3" style="margin-top:0.8rem">
+              <label>Protocol
+                <select id="weather-protocol">
+                  <option value="auto">Auto</option>
+                  <option value="nexus">Nexus</option>
+                  <option value="gt_wt_02">GT-WT-02</option>
+                  <option value="fineoffset_wh2">Fine Offset WH2</option>
+                  <option value="fineoffset_wh5">Fine Offset WH5</option>
+                  <option value="rubicson">Rubicson / TFA</option>
+                  <option value="infactory">inFactory</option>
+                  <option value="esperanza">Esperanza</option>
+                </select>
+              </label>
+              <label>Sensor ID<input id="weather-id" type="number" placeholder="—" /></label>
+              <label>Channel
+                <select id="weather-channel">
+                  <option value="0">Any</option>
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                </select>
+              </label>
+            </div>
+            <p class="muted" id="weather-picked">No station selected yet.</p>
+          </div>
+
+          <div class="row gap" style="margin-top:1rem">
+            <button class="btn primary" id="remote-save">Save device</button>
+            <button class="btn" id="remote-cancel">Cancel</button>
+          </div>
+          <p class="hint">Saving reboots the hub so HomeKit picks up the new device.</p>
+        </div>
+      </section>
+
+      <!-- ACTIONS -->
+      <section class="page" id="page-actions" hidden>
+        <div class="panel" id="actions-list-panel">
+          <div class="row between">
+            <div>
+              <h2>Actions</h2>
+              <p class="muted">Sequences of TX, press&amp;hold, and delays — e.g. wake chicken door 2s then send open. Bind to a Device button to use in HomeKit.</p>
+            </div>
+            <button class="btn primary" id="action-new">New action</button>
+          </div>
+          <p class="muted" id="action-runner-status">Idle</p>
+          <div id="actions-list" class="signal-list"></div>
+        </div>
+        <div class="panel" id="action-editor" hidden>
+          <h3 id="action-editor-title">New action</h3>
+          <label>Name<input id="action-name" placeholder="Chicken open" maxlength="40" /></label>
+          <p class="hint">To use in HomeKit, bind this action to a Device button (Signal dropdown → Actions).</p>
+          <div class="row between" style="margin-top:0.8rem">
+            <h4 style="margin:0">Steps</h4>
+            <div class="row gap">
+              <button class="btn" id="action-add-tx" type="button">+ Signal</button>
+              <button class="btn" id="action-add-hold" type="button">+ Hold</button>
+              <button class="btn" id="action-add-delay" type="button">+ Delay</button>
+            </div>
+          </div>
+          <p class="hint"><em>Hold</em> keeps transmitting a signal for N seconds (press&amp;hold). <em>Delay</em> waits. <em>Signal</em> sends with repeat count.</p>
+          <div id="action-steps" class="signal-list"></div>
+          <div class="row gap" style="margin-top:1rem">
+            <button class="btn primary" id="action-save">Save action</button>
+            <button class="btn" id="action-run-edit">Run</button>
+            <button class="btn" id="action-cancel">Cancel</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- HOMEKIT -->
+      <section class="page" id="page-homekit" hidden>
+        <div class="panel">
+          <h2>Apple HomeKit</h2>
+          <p class="muted">Native HomeKit (HomeSpan). Remotes expose buttons as programmable presses, On switches, or toggle switches; sensors as motion; weather as temperature / humidity.</p>
+          <dl class="kv">
+            <dt>Status</dt><dd id="hk-status">—</dd>
+            <dt>HAP port</dt><dd id="hk-port">—</dd>
+            <dt>Setup code</dt><dd id="hk-code">—</dd>
+            <dt>Devices</dt><dd id="hk-remotes">—</dd>
+          </dl>
+          <div class="hk-card">
+            <div class="hk-code-big" id="hk-code-big">231-14-081</div>
+            <p class="muted">Home app → Add Accessory → More options… → Enter code</p>
+            <p class="hint">iPhone must be on the same 2.4 GHz Wi-Fi as the hub. Look for <strong>CC1101 RF Hub</strong> or enter the code above.</p>
+          </div>
+          <div class="row gap">
+            <button class="btn" id="hk-refresh">Refresh</button>
+            <button class="btn" id="hk-rebuild">Rebuild accessories &amp; reboot</button>
+          </div>
+          <p class="hint">Requires Wi-Fi station mode. After changing devices, remove a stale accessory in Home if needed, then re-add with the setup code.</p>
+        </div>
+      </section>
+
+      <!-- TRANSMITTER -->
+      <section class="page" id="page-transmitter" hidden>
+        <div class="panel">
+          <h2>Transmitter</h2>
+          <div class="form-grid cols-3">
+            <label>Frequency MHz<input id="tx-freq" type="number" step="0.001" value="433.92" /></label>
+            <label>Modulation
+              <select id="tx-mod">
+                <option value="2" selected>ASK/OOK</option>
+                <option value="0">2-FSK</option>
+                <option value="1">GFSK</option>
+              </select>
+            </label>
+            <label>Repeat count<input id="tx-reps" type="number" min="1" max="50" value="3" /></label>
+          </div>
+          <label>Raw pulse timings
+            <textarea id="tx-pulses" rows="5" placeholder="350,-1050,350,-350,350,-1050"></textarea>
+          </label>
+          <div class="row gap">
+            <button class="btn primary" id="tx-send">Transmit</button>
+            <select id="tx-load-sel"><option value="">Load saved signal…</option></select>
+            <button class="btn" id="tx-load-btn">Load</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section class="page" id="page-settings" hidden>
+        <div class="panel">
+          <h2>CC1101 Settings</h2>
+          <div class="form-grid cols-2">
+            <label>Frequency MHz<input id="set-freq" type="number" step="0.001" value="433.92" /></label>
+            <label>Modulation
+              <select id="set-mod">
+                <option value="2">ASK/OOK</option>
+                <option value="0">2-FSK</option>
+                <option value="1">GFSK</option>
+              </select>
+            </label>
+            <label>RX bandwidth kHz<input id="set-bw" type="number" step="1" value="162" /></label>
+            <label>Data rate baud<input id="set-dr" type="number" step="1" value="10000" /></label>
+            <label>Deviation kHz<input id="set-dev" type="number" step="0.1" value="47.6" /></label>
+            <label>RSSI threshold<input id="set-thr" type="number" step="1" value="-70" /></label>
+          </div>
+          <div class="row gap">
+            <button class="btn primary" id="set-save">Save RF Settings</button>
+            <button class="btn" id="set-reset">Reset RF settings</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Wi-Fi</h2>
+          <p class="muted">Clear credentials to re-enter SoftAP provisioning mode after reboot.</p>
+          <button class="btn danger" id="wifi-clear">Clear Wi-Fi &amp; Reboot</button>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js?v=10"></script>
+</body>
+</html>
