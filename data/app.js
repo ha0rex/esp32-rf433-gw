@@ -1429,12 +1429,21 @@
     });
     $("#ota-install").addEventListener("click", async () => {
       const ver = state.ota?.available?.version || "this build";
-      if (!confirm(`Install ${ver} now?\n\nThe device will download firmware and reboot. Do not power off.`)) return;
+      if (!confirm(
+        `Install ${ver} now?\n\n` +
+        `The device will reboot, download firmware with a clean memory map, then reboot again.\n` +
+        `Keep power on for 1–2 minutes.`
+      )) return;
       try {
         const data = await api("/api/ota/install", { method: "POST", body: "{}" });
         renderOta(data);
       } catch (e) {
-        alert(e.message || "Install failed to start");
+        // Device often reboots before the HTTP response returns — expected.
+        $("#ota-phase-label").textContent = "Rebooting";
+        $("#ota-message").textContent = "Installing after reboot — wait for the device to come back…";
+        $("#ota-dot").className = "ota-dot busy";
+        $("#conn-pill").textContent = "updating…";
+        $("#conn-pill").className = "pill warn";
       }
     });
 

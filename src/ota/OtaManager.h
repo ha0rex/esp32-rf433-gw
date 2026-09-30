@@ -33,6 +33,10 @@ class OtaManager {
   void begin();
   void loop();
 
+  // Call after Wi-Fi is up, before HomeKit/press — applies a queued install.
+  // Returns true if an update was attempted (device will reboot on success).
+  bool applyPendingIfNeeded();
+
   OtaChannel channel() const { return channel_; }
   bool setChannel(OtaChannel ch);
 
@@ -48,16 +52,13 @@ class OtaManager {
   const OtaReleaseInfo& available() const { return available_; }
   uint32_t lastCheckMs() const { return lastCheckMs_; }
 
-  // Query GitHub for the selected channel. Blocking network call (~1–3s).
   bool checkForUpdate();
-
-  // Start background install of available_. Returns false if not ready.
   bool startInstall();
 
   bool busy() const {
     return phase_ == OtaPhase::Checking || phase_ == OtaPhase::Downloading ||
            phase_ == OtaPhase::Writing || phase_ == OtaPhase::Rebooting ||
-           installTask_ != nullptr;
+           installTask_ != nullptr || applyingPending_;
   }
 
   void toJson(JsonDocument& doc) const;
@@ -66,7 +67,11 @@ class OtaManager {
   bool fetchRelease(OtaChannel ch, OtaReleaseInfo& out, String& err);
   void setPhase(OtaPhase p, const char* msg);
   static void installTaskThunk(void* arg);
-  void runInstall();
+  void runInstall(const String& url);
+  void clearPending();
+  bool queuePending(const String& url, const String& version);
+  static bool versionNewer(const String& remote, const String& local,
+                           bool nightlyChannel);
 
   Preferences prefs_;
   OtaChannel channel_ = OtaChannel::Stable;
@@ -79,4 +84,7 @@ class OtaManager {
   volatile bool installDone_ = false;
   bool installOk_ = false;
   String installError_;
+  String pendingUrl_;
+  String pendingVersion_;
+  bool applyingPending_ = false;
 };

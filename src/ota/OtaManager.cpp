@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <esp_ota_ops.h>
+#include <esp_heap_caps.h>
 
 namespace {
 constexpr const char* kRepoOwner = "ha0rex";
@@ -13,7 +14,6 @@ constexpr const char* kAssetName = "firmware.bin";
 constexpr const char* kUserAgent = "esp32-rf433-gw-ota";
 
 String releaseApiUrl(OtaChannel ch) {
-  // Rolling tags published by CI: stable ← main, nightly ← Dev
   const char* tag = (ch == OtaChannel::Nightly) ? "nightly" : "stable";
   String url = "https://api.github.com/repos/";
   url += kRepoOwner;
@@ -24,13 +24,58 @@ String releaseApiUrl(OtaChannel ch) {
   return url;
 }
 
-bool versionNewer(const String& remote, const String& local) {
-  if (remote.isEmpty() || remote == local) return false;
-  // Prefer exact mismatch as "available" so nightly rebuilds with same
-  // semver but different +git suffix still offer an update.
-  return remote != local;
+// Strip build metadata (+...) for core compare; keep prerelease (-dev).
+String versionCore(const String& v) {
+  int plus = v.indexOf('+');
+  return plus >= 0 ? v.substring(0, plus) : v;
+}
+
+bool parseSemver(const String& in, int& maj, int& min, int& pat, String& pre) {
+  maj = min = pat = 0;
+  pre = "";
+  String v = versionCore(in);
+  int dash = v.indexOf('-');
+  String core = dash >= 0 ? v.substring(0, dash) : v;
+  if (dash >= 0) pre = v.substring(dash + 1);
+
+  int p1 = core.indexOf('.');
+  if (p1 < 0) {
+    maj = core.toInt();
+    return true;
+  }
+  maj = core.substring(0, p1).toInt();
+  int p2 = core.indexOf('.', p1 + 1);
+  if (p2 < 0) {
+    min = core.substring(p1 + 1).toInt();
+    return true;
+  }
+  min = core.substring(p1 + 1, p2).toInt();
+  pat = core.substring(p2 + 1).toInt();
+  return true;
 }
 }  // namespace
+
+bool OtaManager::versionNewer(const String& remote, const String& local,
+                              bool nightlyChannel) {
+  if (remote.isEmpty()) return false;
+  if (remote == local) return false;
+
+  int rMaj, rMin, rPat, lMaj, lMin, lPat;
+  String rPre, lPre;
+  parseSemver(remote, rMaj, rMin, rPat, rPre);
+  parseSemver(local, lMaj, lMin, lPat, lPre);
+
+  if (rMaj != lMaj) return rMaj > lMaj;
+  if (rMin != lMin) return rMin > lMin;
+  if (rPat != lPat) return rPat > lPat;
+
+  // Same x.y.z — Stable ignores +build metadata (1.7.0 == 1.7.0+abc).
+  // Nightly still offers when the full stamp differs (new Dev build).
+  if (nightlyChannel) return remote != local;
+  if (rPre.length() == 0 && lPre.length() > 0) return true;
+  if (rPre.length() > 0 && lPre.length() == 0) return false;
+  return false;
+}
 
 void OtaManager::begin() {
   prefs_.begin(PrefNamespace, false);
@@ -38,7 +83,38 @@ void OtaManager::begin() {
   channel_ = (ch == (uint8_t)OtaChannel::Nightly) ? OtaChannel::Nightly
                                                   : OtaChannel::Stable;
   message_ = "Idle";
-  Serial.printf("[OTA] channel=%s version=%s\n", channelName(), currentVersion());
+
+  if (prefs_.getBool("ota_pend", false)) {
+    pendingUrl_ = prefs_.getString("ota_url", "");
+    pendingVersion_ = prefs_.getString("ota_ver", "");
+  }
+
+  String lastErr = prefs_.getString("ota_err", "");
+  if (lastErr.length()) {
+    prefs_.remove("ota_err");
+    setPhase(OtaPhase::Failed, lastErr.c_str());
+  }
+
+  Serial.printf("[OTA] channel=%s version=%s pending=%d\n", channelName(),
+                currentVersion(), pendingUrl_.length() ? 1 : 0);
+}
+
+void OtaManager::clearPending() {
+  prefs_.remove("ota_pend");
+  prefs_.remove("ota_url");
+  prefs_.remove("ota_ver");
+  pendingUrl_ = "";
+  pendingVersion_ = "";
+}
+
+bool OtaManager::queuePending(const String& url, const String& version) {
+  if (url.isEmpty()) return false;
+  prefs_.putString("ota_url", url);
+  prefs_.putString("ota_ver", version);
+  prefs_.putBool("ota_pend", true);
+  pendingUrl_ = url;
+  pendingVersion_ = version;
+  return true;
 }
 
 void OtaManager::loop() {
@@ -48,10 +124,12 @@ void OtaManager::loop() {
   installTask_ = nullptr;
   installDone_ = false;
   if (installOk_) {
+    clearPending();
     setPhase(OtaPhase::Rebooting, "Update complete — rebooting");
     delay(600);
     ESP.restart();
   } else {
+    clearPending();
     setPhase(OtaPhase::Failed,
              installError_.isEmpty() ? "Update failed" : installError_.c_str());
   }
@@ -122,11 +200,10 @@ void OtaManager::toJson(JsonDocument& doc) const {
   doc["repo"] = String("https://github.com/") + kRepoOwner + "/" + kRepoName;
   doc["stableBranch"] = "main";
   doc["nightlyBranch"] = "Dev";
+  doc["pending"] = pendingUrl_.length() > 0;
 
   const esp_partition_t* running = esp_ota_get_running_partition();
-  if (running) {
-    doc["partition"] = running->label;
-  }
+  if (running) doc["partition"] = running->label;
 
   JsonObject avail = doc["available"].to<JsonObject>();
   avail["valid"] = available_.valid;
@@ -137,7 +214,8 @@ void OtaManager::toJson(JsonDocument& doc) const {
     avail["sizeBytes"] = (uint32_t)available_.sizeBytes;
     avail["prerelease"] = available_.prerelease;
     avail["notes"] = available_.notes;
-    avail["newer"] = versionNewer(available_.version, currentVersion());
+    avail["newer"] = versionNewer(available_.version, currentVersion(),
+                                  channel_ == OtaChannel::Nightly);
   }
 }
 
@@ -149,7 +227,7 @@ bool OtaManager::fetchRelease(OtaChannel ch, OtaReleaseInfo& out, String& err) {
   }
 
   WiFiClientSecure client;
-  client.setInsecure();  // GitHub + CDN; cert bundle would add ~50KB flash
+  client.setInsecure();
   client.setTimeout(15);
 
   HTTPClient http;
@@ -178,7 +256,6 @@ bool OtaManager::fetchRelease(OtaChannel ch, OtaReleaseInfo& out, String& err) {
     return false;
   }
 
-  // Releases JSON is large; filter to fields we need.
   JsonDocument filter;
   filter["tag_name"] = true;
   filter["name"] = true;
@@ -204,8 +281,6 @@ bool OtaManager::fetchRelease(OtaChannel ch, OtaReleaseInfo& out, String& err) {
   out.notes = doc["body"] | "";
   if (out.notes.length() > 400) out.notes = out.notes.substring(0, 400) + "…";
 
-  // Prefer version from release name "Stable 1.7.0+abc" / "Nightly 1.7.0-dev+abc"
-  // fall back to tag body first line "version: x" or tag name.
   String ver;
   {
     String n = out.name;
@@ -227,7 +302,6 @@ bool OtaManager::fetchRelease(OtaChannel ch, OtaReleaseInfo& out, String& err) {
     err = "Release has no firmware.bin asset";
     return false;
   }
-
   out.valid = true;
   return true;
 }
@@ -253,7 +327,8 @@ bool OtaManager::checkForUpdate() {
   available_ = info;
   lastCheckMs_ = millis();
 
-  if (!versionNewer(info.version, currentVersion())) {
+  const bool nightly = channel_ == OtaChannel::Nightly;
+  if (!versionNewer(info.version, currentVersion(), nightly)) {
     setPhase(OtaPhase::UpToDate, "You're on the latest build");
     return true;
   }
@@ -264,7 +339,7 @@ bool OtaManager::checkForUpdate() {
 }
 
 bool OtaManager::startInstall() {
-  if (installTask_) return false;
+  if (busy()) return false;
   if (phase_ != OtaPhase::Ready || !available_.valid ||
       available_.firmwareUrl.isEmpty()) {
     return false;
@@ -274,30 +349,74 @@ bool OtaManager::startInstall() {
     return false;
   }
 
+  // Queue download for early-boot apply. Running beside HomeKit fragments
+  // heap so Update.begin() cannot malloc its 4KB buffer.
+  if (!queuePending(available_.firmwareUrl, available_.version)) {
+    setPhase(OtaPhase::Failed, "Could not queue update");
+    return false;
+  }
+
+  setPhase(OtaPhase::Rebooting,
+           "Rebooting to install with a clean memory map…");
+  progressPct_ = 0;
+  Serial.printf("[OTA] queued %s — reboot to apply\n",
+                available_.version.c_str());
+  delay(900);
+  ESP.restart();
+  return true;
+}
+
+bool OtaManager::applyPendingIfNeeded() {
+  if (pendingUrl_.isEmpty()) return false;
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[OTA] pending update but Wi-Fi down — will retry next boot");
+    return false;
+  }
+
+  applyingPending_ = true;
+  available_.valid = true;
+  available_.version = pendingVersion_;
+  available_.firmwareUrl = pendingUrl_;
+  progressPct_ = 0;
+  setPhase(OtaPhase::Downloading, "Installing queued update…");
+  Serial.printf("[OTA] applying pending %s (free=%u maxAlloc=%u)\n",
+                pendingVersion_.c_str(), ESP.getFreeHeap(),
+                ESP.getMaxAllocHeap());
+
   installDone_ = false;
   installOk_ = false;
   installError_ = "";
-  progressPct_ = 0;
-  setPhase(OtaPhase::Downloading, "Starting download…");
+  runInstall(pendingUrl_);
 
-  BaseType_t ok = xTaskCreatePinnedToCore(
-      installTaskThunk, "ota", 12288, this, 1, &installTask_, 0);
-  if (ok != pdPASS) {
-    installTask_ = nullptr;
-    setPhase(OtaPhase::Failed, "Could not start update task");
-    return false;
+  applyingPending_ = false;
+  if (installOk_) {
+    clearPending();
+    setPhase(OtaPhase::Rebooting, "Update complete — rebooting");
+    delay(500);
+    ESP.restart();
+    return true;
   }
+
+  prefs_.putString("ota_err", installError_.isEmpty() ? "Update failed"
+                                                      : installError_);
+  clearPending();
+  setPhase(OtaPhase::Failed,
+           installError_.isEmpty() ? "Update failed" : installError_.c_str());
+  Serial.printf("[OTA] pending apply failed: %s\n", message_.c_str());
   return true;
 }
 
 void OtaManager::installTaskThunk(void* arg) {
-  static_cast<OtaManager*>(arg)->runInstall();
+  auto* self = static_cast<OtaManager*>(arg);
+  self->runInstall(self->available_.firmwareUrl);
+  self->installDone_ = true;
+  vTaskDelete(nullptr);
 }
 
-void OtaManager::runInstall() {
+void OtaManager::runInstall(const String& url) {
   WiFiClientSecure client;
   client.setInsecure();
-  client.setTimeout(20);
+  client.setTimeout(30);
 
   HTTPUpdate httpUpdate;
   httpUpdate.rebootOnUpdate(false);
@@ -327,11 +446,10 @@ void OtaManager::runInstall() {
     installError_ = String("HTTPUpdate error ") + err;
   });
 
-  Serial.printf("[OTA] installing %s from %s\n", available_.version.c_str(),
-                available_.firmwareUrl.c_str());
+  Serial.printf("[OTA] downloading %s (heap=%u max=%u)\n", url.c_str(),
+                ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
-  t_httpUpdate_return ret =
-      httpUpdate.update(client, available_.firmwareUrl);
+  t_httpUpdate_return ret = httpUpdate.update(client, url);
 
   switch (ret) {
     case HTTP_UPDATE_OK:
@@ -347,7 +465,10 @@ void OtaManager::runInstall() {
       installOk_ = false;
       if (installError_.isEmpty()) {
         installError_ = httpUpdate.getLastErrorString();
-        if (installError_.isEmpty()) installError_ = "Update failed";
+        if (installError_.isEmpty()) {
+          installError_ = String("Update failed (heap ") + ESP.getFreeHeap() +
+                          "/" + ESP.getMaxAllocHeap() + ")";
+        }
       } else {
         String detail = httpUpdate.getLastErrorString();
         if (detail.length()) {
@@ -357,7 +478,4 @@ void OtaManager::runInstall() {
       }
       break;
   }
-
-  installDone_ = true;
-  vTaskDelete(nullptr);
 }

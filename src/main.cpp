@@ -60,9 +60,6 @@ void setup() {
   gRemotes.begin();
   gActions.begin();
   gOta.begin();
-  gPress.setHomeKit(&gHomeKit);
-  gPress.setActionRunner(&gRunner);
-  gPress.begin();
 
   Serial.println("[WiFi] Starting...");
   gWifi.begin();
@@ -70,6 +67,15 @@ void setup() {
   Serial.printf("[WiFi] mode=%s IP=%s\n",
                 captive ? "AP" : "STA",
                 gWifi.ipAddress().c_str());
+
+  // Apply queued OTA while heap is still contiguous (before HomeKit/press).
+  if (!captive && gWifi.isConnected()) {
+    gOta.applyPendingIfNeeded();  // reboots on success; continues on failure
+  }
+
+  gPress.setHomeKit(&gHomeKit);
+  gPress.setActionRunner(&gRunner);
+  gPress.begin();
 
   gWeb.begin(captive);
 
@@ -93,7 +99,6 @@ void loop() {
   gWeb.pump();
 
   if (otaBusy) {
-    // Keep HTTP/WS alive for progress; pause radio work during flash.
     gWeb.loop();
     delay(1);
     return;
