@@ -9,6 +9,7 @@
 #include "action/ActionRunner.h"
 #include "homekit/HomeKitManager.h"
 #include "press/PressDetector.h"
+#include "ota/OtaManager.h"
 #include "web/WebServer.h"
 
 RadioManager gRadio;
@@ -19,8 +20,9 @@ ActionStorage gActions;
 ActionRunner gRunner(gRadio, gSignals);
 HomeKitManager gHomeKit(gRadio, gSignals, gRemotes, gActions, gRunner);
 PressDetector gPress(gRadio, gSignals, gRemotes);
+OtaManager gOta;
 AppWebServer gWeb(gRadio, gWifi, gSignals, gRemotes, gActions, gRunner, gHomeKit,
-                  gPress);
+                  gPress, gOta);
 
 void setup() {
   Serial.begin(115200);
@@ -29,6 +31,7 @@ void setup() {
   Serial.println("========================================");
   Serial.println(" ESP32-C3 CC1101 RF Gateway");
   Serial.println("========================================");
+  Serial.printf("Firmware: %s\n", FwInfo::Version);
   Serial.printf("Chip: %s rev%d\n", ESP.getChipModel(), ESP.getChipRevision());
   Serial.printf("CPU: %u MHz  Free heap: %u\n", ESP.getCpuFreqMHz(), ESP.getFreeHeap());
 
@@ -56,6 +59,7 @@ void setup() {
   gSignals.begin();
   gRemotes.begin();
   gActions.begin();
+  gOta.begin();
   gPress.setHomeKit(&gHomeKit);
   gPress.setActionRunner(&gRunner);
   gPress.begin();
@@ -80,25 +84,33 @@ void setup() {
 }
 
 void loop() {
+  const bool otaBusy = gOta.busy();
   const bool radioBusy =
       gRadio.transmitter().isActive() || gRunner.busy();
 
+  gOta.loop();
   gWifi.loop();
   gWeb.pump();
+
+  if (otaBusy) {
+    // Keep HTTP/WS alive for progress; pause radio work during flash.
+    gWeb.loop();
+    delay(1);
+    return;
+  }
+
   gRadio.loop();
   gRunner.loop();
   gWeb.pump();
 
   if (radioBusy) {
-    // HomeSpan/press are expensive and starve HTTP during TX holds.
-    // Frames stay atomic; we only skip non-essential work between them.
     gWeb.pump();
     return;
   }
 
-  gWeb.loop();  // includes periodic status broadcast
+  gWeb.loop();
   gHomeKit.loop();
   gPress.loop();
-  gWeb.pump();  // press/match can be heavy — always service HTTP after
+  gWeb.pump();
   delay(1);
 }

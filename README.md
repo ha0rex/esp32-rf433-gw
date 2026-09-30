@@ -177,6 +177,19 @@ Each remote appears as one HomeKit accessory with one switch per button. Tapping
 
 Web UI stays on port 80; HomeKit HAP uses port **1201**.
 
+## Over-the-air (OTA) updates
+
+The Settings page can install firmware from GitHub Releases:
+
+| Channel | Git branch | Release tag |
+|---------|------------|-------------|
+| **Stable** | `main` | `stable` |
+| **Nightly** | `Dev` | `nightly` (pre-release) |
+
+CI (`.github/workflows/ota-release.yml`) builds on every push to those branches and refreshes the matching rolling release with `firmware.bin`.
+
+**First time after enabling OTA:** flash once over USB (`python3 scripts/flash_safe.py --fs`) so the dual-OTA partition table is written. After that, Stable/Nightly installs work from the web UI.
+
 ## Project layout
 
 ```text
@@ -184,7 +197,8 @@ src/
   main.cpp
   radio/          CC1101 + capture/scan/analyze/TX + state manager
   network/        Wi-Fi SoftAP / STA / captive DNS / mDNS
-  web/            Async HTTP + WebSocket API
+  web/            HTTP + WebSocket API
+  ota/            GitHub release updater (Stable / Nightly)
   storage/        LittleFS signal store
   models/         RFSignal structures
 data/             Web UI (LittleFS)

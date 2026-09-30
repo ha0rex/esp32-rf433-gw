@@ -29,13 +29,14 @@ void AppWebServer::pump() {
 void AppWebServer::loop() {
   pump();
   uint32_t now = millis();
-  // Slow status push while TX/action runs so we don't fight the radio.
+  // Slow status push while TX/action/OTA runs so we don't fight the radio.
   const uint32_t pushMs =
-      (radio_.transmitter().isActive() || runner_.busy()) ? 1000 : 250;
+      (radio_.transmitter().isActive() || runner_.busy() || ota_.busy()) ? 400 : 250;
   if (now - lastWsPushMs_ >= pushMs) {
     lastWsPushMs_ = now;
     if (ws_.connectedClients() > 0) {
       broadcastStatus();
+      broadcastOta();
       PressEvent ev;
       while (press_.takeNewerThan(lastPressSeqSent_, ev)) {
         lastPressSeqSent_ = ev.seq;
@@ -159,6 +160,22 @@ void AppWebServer::broadcastPress(const PressEvent& ev) {
   ws_.broadcastTXT(out);
 }
 
+void AppWebServer::broadcastOta() {
+  const char* phase = ota_.phaseName();
+  const int prog = ota_.progressPct();
+  if (lastOtaPhaseSent_ == phase && prog == lastOtaProgressSent_ && !ota_.busy()) {
+    return;
+  }
+  lastOtaPhaseSent_ = phase;
+  lastOtaProgressSent_ = prog;
+  JsonDocument doc;
+  ota_.toJson(doc);
+  doc["type"] = "ota";
+  String out;
+  serializeJson(doc, out);
+  ws_.broadcastTXT(out);
+}
+
 void AppWebServer::setupRoutes() {
   server_.on("/api/status", HTTP_GET, [this]() { handleStatus(); });
   server_.on("/api/signals", HTTP_GET, [this]() { handleSignals(); });
@@ -208,6 +225,11 @@ void AppWebServer::setupRoutes() {
 
   server_.on("/api/homekit/status", HTTP_GET, [this]() { handleHomeKitStatus(); });
   server_.on("/api/homekit/rebuild", HTTP_POST, [this]() { handleHomeKitReboot(); });
+
+  server_.on("/api/ota", HTTP_GET, [this]() { handleOtaStatus(); });
+  server_.on("/api/ota/channel", HTTP_POST, [this]() { handleOtaChannel(); });
+  server_.on("/api/ota/check", HTTP_POST, [this]() { handleOtaCheck(); });
+  server_.on("/api/ota/install", HTTP_POST, [this]() { handleOtaInstall(); });
 
   // REST-ish signal paths
   server_.onNotFound([this]() {
@@ -301,6 +323,9 @@ void AppWebServer::handleStatus() {
   doc["rf"]["rssi"] = radio_.currentRssi();
   doc["homekit"]["enabled"] = homekit_.isEnabled();
   doc["homekit"]["port"] = homekit_.hapPort();
+  doc["fwVersion"] = ota_.currentVersion();
+  doc["otaChannel"] = ota_.channelName();
+  doc["otaPhase"] = ota_.phaseName();
   sendJson(200, doc);
 }
 
@@ -878,4 +903,59 @@ void AppWebServer::handleHomeKitReboot() {
   sendJson(200, doc);
   delay(500);
   homekit_.requestRebuildAndReboot();
+}
+
+void AppWebServer::handleOtaStatus() {
+  JsonDocument doc;
+  ota_.toJson(doc);
+  sendJson(200, doc);
+}
+
+void AppWebServer::handleOtaChannel() {
+  if (ota_.busy()) {
+    sendError(409, "update in progress");
+    return;
+  }
+  JsonDocument body;
+  if (!readJsonBody(body)) {
+    sendError(400, "invalid json");
+    return;
+  }
+  const char* ch = body["channel"] | "stable";
+  if (!ota_.setChannel(OtaManager::channelFromName(ch))) {
+    sendError(409, "cannot change channel now");
+    return;
+  }
+  JsonDocument doc;
+  ota_.toJson(doc);
+  sendJson(200, doc);
+}
+
+void AppWebServer::handleOtaCheck() {
+  if (ota_.busy()) {
+    sendError(409, "update in progress");
+    return;
+  }
+  // Stop RF listen so TLS has heap/CPU
+  radio_.yieldHkListen();
+  ota_.checkForUpdate();
+  JsonDocument doc;
+  ota_.toJson(doc);
+  sendJson(200, doc);
+}
+
+void AppWebServer::handleOtaInstall() {
+  if (strcmp(ota_.phaseName(), "ready") != 0) {
+    sendError(409, "no update ready — check first");
+    return;
+  }
+  radio_.yieldHkListen();
+  if (runner_.busy()) runner_.stop();
+  if (!ota_.startInstall()) {
+    sendError(500, ota_.message().c_str());
+    return;
+  }
+  JsonDocument doc;
+  ota_.toJson(doc);
+  sendJson(200, doc);
 }

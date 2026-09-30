@@ -1,0 +1,114 @@
+name: Build & publish OTA
+
+on:
+  push:
+    branches: [main, Dev]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Force channel (stable or nightly)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  PIO_ENV: esp32-c3-supermini
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: pip install -U platformio
+
+      - name: Resolve channel & version
+        id: meta
+        run: |
+          BRANCH="${GITHUB_REF_NAME}"
+          if [ -n "${{ github.event.inputs.channel }}" ]; then
+            CHANNEL="${{ github.event.inputs.channel }}"
+          elif [ "$BRANCH" = "main" ]; then
+            CHANNEL="stable"
+          elif [ "$BRANCH" = "Dev" ]; then
+            CHANNEL="nightly"
+          else
+            echo "Unsupported branch: $BRANCH"
+            exit 1
+          fi
+
+          SHORT=$(git rev-parse --short HEAD)
+          BASE=$(grep -oE 'FW_VERSION="[^"]+"' platformio.ini | head -1 | cut -d'"' -f2)
+          BASE=${BASE:-0.0.0}
+          if [ "$CHANNEL" = "nightly" ]; then
+            VERSION="${BASE}-dev+${SHORT}"
+            TITLE="Nightly ${VERSION}"
+            PRERELEASE=true
+          else
+            VERSION="${BASE}+${SHORT}"
+            TITLE="Stable ${VERSION}"
+            PRERELEASE=false
+          fi
+
+          # Stamp the binary with this exact build id for OTA comparison
+          sed -i "s/FW_VERSION=\"[^\"]*\"/FW_VERSION=\"${VERSION}\"/" platformio.ini
+
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "title=$TITLE" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "short=$SHORT" >> "$GITHUB_OUTPUT"
+          echo "Publishing $TITLE (tag=$CHANNEL)"
+
+      - name: Build firmware
+        run: pio run -e "$PIO_ENV"
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p dist
+          cp ".pio/build/${PIO_ENV}/firmware.bin" dist/firmware.bin
+          cat > dist/version.json <<EOF
+          {
+            "version": "${{ steps.meta.outputs.version }}",
+            "channel": "${{ steps.meta.outputs.channel }}",
+            "git": "${{ steps.meta.outputs.short }}",
+            "branch": "${GITHUB_REF_NAME}",
+            "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "repo": "${{ github.repository }}"
+          }
+          EOF
+          ls -lh dist/
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.channel }}
+          name: ${{ steps.meta.outputs.title }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          generate_release_notes: true
+          make_latest: ${{ steps.meta.outputs.channel == 'stable' }}
+          files: |
+            dist/firmware.bin
+            dist/version.json
+          body: |
+            ## ${{ steps.meta.outputs.title }}
+
+            - **Channel:** `${{ steps.meta.outputs.channel }}`
+            - **Branch:** `${{ github.ref_name }}`
+            - **Commit:** `${{ steps.meta.outputs.short }}`
+            - **Version:** `${{ steps.meta.outputs.version }}`
+
+            Install from the device **Settings → Software Update** panel, or flash `firmware.bin` with esptool/PlatformIO.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

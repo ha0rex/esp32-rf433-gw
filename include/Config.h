@@ -44,4 +44,17 @@ constexpr uint16_t    HttpPort       = 80;
 constexpr uint16_t    WsPort         = 81;
 }  // namespace NetDefaults
 
+// ---------------------------------------------------------------------------
+// Firmware / OTA (FW_VERSION injected by platformio.ini build_flags)
+// ---------------------------------------------------------------------------
+#ifndef FW_VERSION
+#define FW_VERSION "0.0.0-dev"
+#endif
+
+namespace FwInfo {
+constexpr const char* Version = FW_VERSION;
+constexpr const char* GithubOwner = "ha0rex";
+constexpr const char* GithubRepo = "esp32-rf433-gw";
+}  // namespace FwInfo
+
 constexpr const char* PrefNamespace = "rf433gw";

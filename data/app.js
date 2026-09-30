@@ -169,6 +169,7 @@
       loadSignals().catch(console.warn);
       refreshPresses().catch(console.warn);
     }
+    if (name === "settings") refreshOta(false).catch(console.warn);
   }
 
   function stopRecPoll() {
@@ -437,6 +438,8 @@
           if (typeof msg.pressListening === "boolean") updateListenUi(msg.pressListening);
         } else if (msg.type === "press") {
           flashPress(msg);
+        } else if (msg.type === "ota") {
+          renderOta(msg);
         }
       } catch (_) {}
     };
@@ -447,12 +450,95 @@
       const st = await api("/api/status");
       state.status = st;
       updateDashboard(st);
-      // SoftAP without credentials -> setup UX
-      if (st.wifiMode === "AP" && location.pathname) {
-        // still allow full UI; setup page available from settings or auto
+      if (st.fwVersion) {
+        const pill = $("#ota-current-pill");
+        if (pill) pill.textContent = `v${st.fwVersion}`;
       }
+      if (state.page === "settings") refreshOta(false);
     } catch (e) {
       console.warn(e);
+    }
+  }
+
+  const OTA_PHASE_LABEL = {
+    idle: "Idle",
+    checking: "Checking",
+    ready: "Update available",
+    downloading: "Downloading",
+    writing: "Installing",
+    rebooting: "Rebooting",
+    failed: "Failed",
+    up_to_date: "Up to date",
+  };
+
+  function renderOta(data) {
+    if (!data || !$("#ota-status-card")) return;
+    state.ota = data;
+    const phase = data.phase || "idle";
+    const busy = !!data.busy;
+    $("#ota-phase-label").textContent = OTA_PHASE_LABEL[phase] || phase;
+    $("#ota-message").textContent = data.message || "";
+    if (data.version) $("#ota-current-pill").textContent = `v${data.version}`;
+
+    $$(".ota-ch-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.channel === data.channel);
+      btn.disabled = busy;
+    });
+
+    const dot = $("#ota-dot");
+    dot.className = "ota-dot";
+    if (phase === "failed") dot.classList.add("err");
+    else if (phase === "up_to_date") dot.classList.add("ok");
+    else if (phase === "ready") dot.classList.add("warn");
+    else if (busy || phase === "checking" || phase === "downloading" || phase === "writing" || phase === "rebooting") {
+      dot.classList.add("busy");
+    }
+
+    const showProg = phase === "downloading" || phase === "writing" || phase === "rebooting";
+    $("#ota-progress").hidden = !showProg;
+    if (showProg) {
+      const pct = Math.max(0, Math.min(100, Number(data.progress) || 0));
+      $("#ota-progress-fill").style.width = `${pct}%`;
+      $("#ota-progress-pct").textContent = `${pct}%`;
+      $("#ota-progress-hint").textContent =
+        phase === "rebooting" ? "Device is restarting…" : "Keep this page open";
+    }
+
+    const avail = data.available || {};
+    const showAvail = !!avail.valid && (phase === "ready" || (avail.newer && phase !== "up_to_date"));
+    $("#ota-avail").hidden = !showAvail;
+    if (showAvail) {
+      $("#ota-avail-ver").textContent = avail.version || "—";
+      const bits = [];
+      if (avail.publishedAt) {
+        try { bits.push(new Date(avail.publishedAt).toLocaleString()); } catch (_) { bits.push(avail.publishedAt); }
+      }
+      if (avail.sizeBytes) bits.push(`${Math.round(avail.sizeBytes / 1024)} KB`);
+      if (avail.prerelease) bits.push("pre-release");
+      $("#ota-avail-meta").textContent = bits.join(" · ") || "—";
+      const notes = (avail.notes || "").trim();
+      $("#ota-notes").hidden = !notes;
+      $("#ota-notes").textContent = notes;
+    }
+
+    $("#ota-check").disabled = busy;
+    $("#ota-install").disabled = phase !== "ready" || busy;
+
+    if (phase === "rebooting") {
+      $("#conn-pill").textContent = "updating…";
+      $("#conn-pill").className = "pill warn";
+    }
+  }
+
+  async function refreshOta(forceCheck) {
+    try {
+      const data = forceCheck
+        ? await api("/api/ota/check", { method: "POST", body: "{}" })
+        : await api("/api/ota");
+      renderOta(data);
+    } catch (e) {
+      console.warn(e);
+      if (forceCheck) alert(e.message || "Update check failed");
     }
   }
 
@@ -1320,6 +1406,36 @@
     $("#wifi-clear").addEventListener("click", async () => {
       if (!confirm("Clear Wi-Fi credentials and reboot?")) return;
       await api("/api/wifi/clear", { method: "POST" });
+    });
+
+    $$(".ota-ch-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const channel = btn.dataset.channel;
+        try {
+          const data = await api("/api/ota/channel", {
+            method: "POST",
+            body: JSON.stringify({ channel }),
+          });
+          renderOta(data);
+        } catch (e) {
+          alert(e.message || "Could not change channel");
+        }
+      });
+    });
+    $("#ota-check").addEventListener("click", async () => {
+      $("#ota-check").disabled = true;
+      $("#ota-message").textContent = "Contacting GitHub…";
+      await refreshOta(true);
+    });
+    $("#ota-install").addEventListener("click", async () => {
+      const ver = state.ota?.available?.version || "this build";
+      if (!confirm(`Install ${ver} now?\n\nThe device will download firmware and reboot. Do not power off.`)) return;
+      try {
+        const data = await api("/api/ota/install", { method: "POST", body: "{}" });
+        renderOta(data);
+      } catch (e) {
+        alert(e.message || "Install failed to start");
+      }
     });
 
     $("#wifi-scan-btn").addEventListener("click", async () => {

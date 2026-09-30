@@ -12,12 +12,13 @@
 #include "../action/ActionRunner.h"
 #include "../homekit/HomeKitManager.h"
 #include "../press/PressDetector.h"
+#include "../ota/OtaManager.h"
 
 class AppWebServer {
  public:
   AppWebServer(RadioManager& radio, WiFiManager& wifi, SignalStorage& signals,
                RemoteStorage& remotes, ActionStorage& actions, ActionRunner& runner,
-               HomeKitManager& homekit, PressDetector& press)
+               HomeKitManager& homekit, PressDetector& press, OtaManager& ota)
       : radio_(radio),
         wifi_(wifi),
         signals_(signals),
@@ -26,6 +27,7 @@ class AppWebServer {
         runner_(runner),
         homekit_(homekit),
         press_(press),
+        ota_(ota),
         server_(80),
         ws_(81) {}
 
@@ -38,6 +40,7 @@ class AppWebServer {
   void setupRoutes();
   void broadcastStatus();
   void broadcastPress(const PressEvent& ev);
+  void broadcastOta();
   bool handleStatic(String path);
   String contentType(const String& path);
   bool readJsonBody(JsonDocument& doc);
@@ -84,6 +87,10 @@ class AppWebServer {
   void handleHomeKitStatus();
   void handleHomeKitReboot();
   void handlePresses();
+  void handleOtaStatus();
+  void handleOtaChannel();
+  void handleOtaCheck();
+  void handleOtaInstall();
 
   RadioManager& radio_;
   WiFiManager& wifi_;
@@ -93,9 +100,12 @@ class AppWebServer {
   ActionRunner& runner_;
   HomeKitManager& homekit_;
   PressDetector& press_;
+  OtaManager& ota_;
   WebServer server_;
   WebSocketsServer ws_;
   bool captive_ = false;
   uint32_t lastWsPushMs_ = 0;
   uint32_t lastPressSeqSent_ = 0;
+  String lastOtaPhaseSent_;
+  int lastOtaProgressSent_ = -1;
 };

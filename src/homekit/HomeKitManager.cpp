@@ -1,4 +1,5 @@
 #include "HomeKitManager.h"
+#include "Config.h"
 #include <HomeSpan.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
@@ -427,7 +428,7 @@ void HomeKitManager::buildAccessories() {
       new Characteristic::Manufacturer("esp32-rf433gw");
       new Characteristic::Model("ESP32-C3 + CC1101");
       new Characteristic::SerialNumber("RFGW-001");
-      new Characteristic::FirmwareRevision("1.6.0");
+      new Characteristic::FirmwareRevision(FW_VERSION);
 
   auto list = remotes_.list();
   Serial.printf("[HomeKit] loading %u devices\n", (unsigned)list.size());
@@ -455,7 +456,7 @@ void HomeKitManager::buildAccessories() {
           new Characteristic::Model(nSwitch && !nStateless ? "RF Switch Remote"
                                                            : "RF Programmable Remote");
           new Characteristic::SerialNumber(remote.id.c_str());
-          new Characteristic::FirmwareRevision("1.6.0");
+          new Characteristic::FirmwareRevision(FW_VERSION);
 
         Service::ServiceLabel* label = nullptr;
         if (nStateless > 0) {
@@ -509,7 +510,7 @@ void HomeKitManager::buildAccessories() {
           new Characteristic::Manufacturer("esp32-rf433gw");
           new Characteristic::Model("RF Motion Sensor");
           new Characteristic::SerialNumber(remote.id.c_str());
-          new Characteristic::FirmwareRevision("1.6.0");
+          new Characteristic::FirmwareRevision(FW_VERSION);
         for (const auto& btn : remote.buttons) {
           auto* mot = new RfMotionSensor(
               btn.name.length() ? btn.name : remote.name, btn.signalId);
@@ -526,7 +527,7 @@ void HomeKitManager::buildAccessories() {
           new Characteristic::Manufacturer("esp32-rf433gw");
           new Characteristic::Model("RF Temperature Sensor");
           new Characteristic::SerialNumber(remote.id.c_str());
-          new Characteristic::FirmwareRevision("1.6.0");
+          new Characteristic::FirmwareRevision(FW_VERSION);
         auto* ts = new RfTempSensor(remote.name, remote.id, remote.weatherProtocol,
                                     remote.weatherId, remote.weatherChannel,
                                     remote.lastTempC);
@@ -542,7 +543,7 @@ void HomeKitManager::buildAccessories() {
           new Characteristic::Manufacturer("esp32-rf433gw");
           new Characteristic::Model("RF Humidity Sensor");
           new Characteristic::SerialNumber(remote.id.c_str());
-          new Characteristic::FirmwareRevision("1.6.0");
+          new Characteristic::FirmwareRevision(FW_VERSION);
         auto* hs = new RfHumiditySensor(remote.name, remote.id, remote.weatherProtocol,
                                         remote.weatherId, remote.weatherChannel,
                                         remote.lastHumidity);

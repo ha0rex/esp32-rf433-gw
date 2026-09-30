@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0b1220" />
   <title>CC1101 RF Gateway</title>
-  <link rel="stylesheet" href="/style.css?v=5" />
+  <link rel="stylesheet" href="/style.css?v=6" />
 </head>
 <body>
   <div id="app">
@@ -434,9 +434,68 @@
           <p class="muted">Clear credentials to re-enter SoftAP provisioning mode after reboot.</p>
           <button class="btn danger" id="wifi-clear">Clear Wi-Fi &amp; Reboot</button>
         </div>
+
+        <div class="panel ota-panel">
+          <div class="ota-head">
+            <div>
+              <div class="ota-kicker">Firmware</div>
+              <h2>Software Update</h2>
+            </div>
+            <div class="ota-version-pill" id="ota-current-pill">—</div>
+          </div>
+          <p class="muted ota-lead">
+            Updates download from GitHub Releases.
+            <strong>Stable</strong> tracks <code>main</code>;
+            <strong>Nightly</strong> tracks <code>Dev</code>.
+          </p>
+
+          <div class="ota-channel" role="radiogroup" aria-label="Update channel">
+            <button type="button" class="ota-ch-btn active" data-channel="stable" id="ota-ch-stable">
+              <span class="ota-ch-title">Stable</span>
+              <span class="ota-ch-sub">main · production</span>
+            </button>
+            <button type="button" class="ota-ch-btn" data-channel="nightly" id="ota-ch-nightly">
+              <span class="ota-ch-title">Nightly</span>
+              <span class="ota-ch-sub">Dev · bleeding edge</span>
+            </button>
+          </div>
+
+          <div class="ota-status" id="ota-status-card">
+            <div class="ota-status-row">
+              <span class="ota-dot" id="ota-dot"></span>
+              <div class="ota-status-text">
+                <div id="ota-phase-label">Idle</div>
+                <div class="muted" id="ota-message">Choose a channel, then check for updates.</div>
+              </div>
+            </div>
+            <div class="ota-progress" id="ota-progress" hidden>
+              <div class="ota-progress-track">
+                <div class="ota-progress-fill" id="ota-progress-fill"></div>
+              </div>
+              <div class="ota-progress-meta">
+                <span id="ota-progress-pct">0%</span>
+                <span class="muted" id="ota-progress-hint">Keep this page open</span>
+              </div>
+            </div>
+            <div class="ota-avail" id="ota-avail" hidden>
+              <div class="ota-avail-ver" id="ota-avail-ver">—</div>
+              <div class="muted" id="ota-avail-meta">—</div>
+              <pre class="ota-notes" id="ota-notes" hidden></pre>
+            </div>
+          </div>
+
+          <div class="row gap ota-actions">
+            <button class="btn" id="ota-check">Check for updates</button>
+            <button class="btn primary" id="ota-install" disabled>Install update</button>
+          </div>
+          <p class="muted ota-foot">
+            Source:
+            <a href="https://github.com/ha0rex/esp32-rf433-gw" target="_blank" rel="noopener">ha0rex/esp32-rf433-gw</a>
+          </p>
+        </div>
       </section>
     </main>
   </div>
-  <script src="/app.js?v=10"></script>
+  <script src="/app.js?v=11"></script>
 </body>
 </html>
